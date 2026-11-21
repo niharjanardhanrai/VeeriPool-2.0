@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>VeriPool Live Trip</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root { --primary: #1E5F3E; --bg: #F7F9F8; --surface: #fff; --text: #122118; --muted: #5B6B62; --border: #DCE5DF; --danger: #C0392B; --warn: #B9770E; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
+    header { background: var(--primary); color: #fff; padding: 14px 16px; }
+    header h1 { margin: 0; font-size: 17px; }
+    header p { margin: 4px 0 0; font-size: 13px; opacity: .85; }
+    main { max-width: 720px; margin: 0 auto; padding: 16px; display: grid; gap: 12px; }
+    #map { height: 340px; border-radius: 14px; border: 1px solid var(--border); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 14px; }
+    .label { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; }
+    .value { font-size: 15px; margin-top: 2px; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .banner { border-radius: 14px; padding: 12px 14px; font-weight: 700; font-size: 14px; }
+    .ok { background: #E6F2EA; color: var(--primary); }
+    .awaiting { background: #FDF2E0; color: var(--warn); }
+    .escalated { background: #FBE7E5; color: var(--danger); }
+    ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+    .muted { color: var(--muted); font-size: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🛡️ VeriPool live trip</h1>
+    <p id="sub">Loading…</p>
+  </header>
+  <main>
+    <div id="status" class="banner ok">Connecting…</div>
+    <div id="map"></div>
+    <div class="card row">
+      <div><div class="label">Stage</div><div class="value" id="stage">—</div></div>
+      <div><div class="label">Car</div><div class="value" id="car">—</div></div>
+      <div><div class="label">From</div><div class="value" id="from">—</div></div>
+      <div><div class="label">To (safe drop-off)</div><div class="value" id="to">—</div></div>
+    </div>
+    <div class="card">
+      <div class="label">Safety log</div>
+      <ul id="alerts"><li>No alerts.</li></ul>
+    </div>
+    <p class="muted">This page updates every 5 seconds. If you think someone is in danger, call 112.</p>
+  </main>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const token = location.pathname.split('/').pop();
+    const STAGES = {
+      requested: 'Waiting for a driver', start_journey: 'Driver on the way', head_to_pickup: 'Driver heading to pickup',
+      arrived_pickup: 'Driver at pickup', ride_started: 'On the way', ride_ended: 'Arrived at drop-off', finished: 'Trip finished',
+    };
+    const KINDS = { off_route: 'Left the planned route', wrong_way: 'Heading away from the drop-off', long_stop: 'Long unplanned stop', sos: 'SOS pressed' };
+    const STATUS = { awaiting: 'waiting for the rider to check in', ok: 'rider said they are OK', escalated: 'support alerted' };
+
+    const map = L.map('map');
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+    let routeLine, corridorLine, car, framed = false;
+
+    function text(id, v) { document.getElementById(id).textContent = v; }
+
+    async function tick() {
+      let data;
+      try {
+        const res = await fetch('/api/track/' + encodeURIComponent(token), { cache: 'no-store' });
+        if (res.status === 404) { setBanner('escalated', 'This tracking link has expired.'); return false; }
+        data = (await res.json()).ride;
+      } catch { setBanner('awaiting', 'Connection lost — retrying…'); return true; }
+
+      text('sub', `${data.rider}'s trip${data.night ? ' · 🌙 night mode' : ''}`);
+      text('stage', STAGES[data.stage] || data.stage);
+      text('car', data.driver ? `${data.driver.firstName} · ${data.driver.vehicle?.make || 'Car'} ${data.driver.vehicle?.plate || ''}` : 'Not assigned yet');
+      text('from', data.pickup.address || 'Pickup');
+      text('to', data.dropoff.address);
+
+      const line = data.waypoints.map((p) => [p.lat, p.lng]);
+      if (!routeLine) {
+        if (data.corridorM) corridorLine = L.polyline(line, { color: '#1E5F3E', opacity: 0.12, weight: 30 }).addTo(map);
+        routeLine = L.polyline(line, { color: '#1E5F3E', weight: 4 }).addTo(map);
+        L.circleMarker(line[0], { radius: 6, color: '#2C6FBB' }).addTo(map).bindTooltip('Pickup');
+        L.circleMarker(line[line.length - 1], { radius: 6, color: '#C0392B' }).addTo(map).bindTooltip('Drop-off');
+      }
+      const loc = data.driverLocation;
+      if (loc?.lat) {
+        if (!car) car = L.circleMarker([loc.lat, loc.lng], { radius: 9, color: '#fff', fillColor: '#F2A93B', fillOpacity: 1, weight: 3 }).addTo(map).bindTooltip('Car');
+        else car.setLatLng([loc.lat, loc.lng]);
+      }
+      if (!framed) { map.fitBounds(routeLine.getBounds().pad(0.2)); framed = true; }
+
+      const alerts = data.alerts || [];
+      document.getElementById('alerts').innerHTML = alerts.length
+        ? alerts.slice().reverse().map((a) => `<li>${new Date(a.at).toLocaleTimeString()} — ${KINDS[a.type]}${a.detail && a.type !== 'sos' ? ' (' + a.detail + ')' : ''}: ${STATUS[a.status]}</li>`).join('')
+        : '<li>No alerts.</li>';
+
+      const latest = alerts[alerts.length - 1];
+      if (latest && latest.status === 'escalated') setBanner('escalated', '🚨 Support has been alerted for this trip. If you think someone is in danger, call 112.');
+      else if (latest && latest.status === 'awaiting') setBanner('awaiting', `⚠️ ${KINDS[latest.type]} — checking in with the rider…`);
+      else if (data.stage === 'ride_started') setBanner('ok', `✅ On the planned route${data.lastReading ? ' · ' + (data.lastReading.remainingM / 1000).toFixed(1) + ' km to go' : ''}`);
+      else setBanner('ok', STAGES[data.stage] || 'Trip in progress');
+      return data.status !== 'completed' && data.status !== 'cancelled';
+    }
+
+    function setBanner(kind, msg) { const el = document.getElementById('status'); el.className = 'banner ' + kind; el.textContent = msg; }
+
+    (async function loop() { if (await tick()) setTimeout(loop, 5000); })();
+  </script>
+</body>
+</html>

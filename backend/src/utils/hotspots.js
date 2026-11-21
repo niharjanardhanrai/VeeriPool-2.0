@@ -1,0 +1,157 @@
+const { haversineKm } = require('./geo');
+
+// Safe drop-off hotspots — the only places a rider can be dropped off, and
+// the only stops a posted ride can route through. Each is a public, lit spot
+// that is staffed or busy (police, hospitals, transit hubs, campus gates,
+// fuel stations, banks with CCTV) — twenty each in Nitte, Karkala, Mulki,
+// Surathkal and Mangaluru. Coordinates from OpenStreetMap (Overpass API).
+// Mirrored in frontend/src/utils/hotspots.js.
+//
+// `night: true` marks the spots that stay staffed through the night —
+// police stations, hospitals with a 24x7 ward, 24x7 bus/rail terminals and
+// campus gates/hostels with night security. During night hours
+// (utils/nightMode.js) riders can only be dropped off at these; shops,
+// banks, temples and malls are busy by day but often empty after closing.
+const SAFE_HOTSPOTS = [
+  // Nitte
+  { id: 'nmamit-gate', label: 'NMAMIT Main Gate', area: 'Nitte', lat: 13.18404, lng: 74.93376, night: true, why: 'Campus security at the gate, lit bus stop on SH1' },
+  { id: 'nitte-college-bus-stand', label: 'College Bus Stand, Nitte', area: 'Nitte', lat: 13.1824, lng: 74.93268, why: 'Busy campus bus stand on SH1, next to the college' },
+  { id: 'nmamit-girls-hostel', label: 'NMAMIT Girls Hostel Gate', area: 'Nitte', lat: 13.18395, lng: 74.9355, night: true, why: 'Hostel gate with round-the-clock security staff' },
+  { id: 'nitte-govt-hospital', label: 'Government Hospital, Nitte', area: 'Nitte', lat: 13.18685, lng: 74.9386, night: true, why: 'Public hospital on SH1 with staff on site' },
+  { id: 'nitte-rural-medical', label: 'Nitte Rural Medical Centre', area: 'Nitte', lat: 13.18502, lng: 74.94367, why: 'Medical centre on SH1 with staff on site' },
+  { id: 'nitte-clinic', label: 'Nitte Clinic', area: 'Nitte', lat: 13.18313, lng: 74.93464, why: 'Clinic on the campus road beside NRAM Polytechnic' },
+  { id: 'nitte-jkshim', label: 'JKSHIM Campus Block', area: 'Nitte', lat: 13.18186, lng: 74.93594, why: 'Campus building covered by college security' },
+  { id: 'nitte-masjid', label: 'Nitte Masjid', area: 'Nitte', lat: 13.18562, lng: 74.93142, why: 'Busy, lit public place near the main junction' },
+  { id: 'nitte-parapadi-bus-stop', label: 'Nitte Parapadi Bus Stop', area: 'Nitte', lat: 13.18512, lng: 74.94806, why: 'Lit bus stop on SH1 with shops around it' },
+  { id: 'nitte-forever-hotel', label: 'Forever Restaurant & Hotel', area: 'Nitte', lat: 13.18532, lng: 74.93965, why: 'Hotel with front-desk staff on SH1' },
+  { id: 'nitte-salt-pepper', label: 'Salt & Pepper Restaurant', area: 'Nitte', lat: 13.18549, lng: 74.93696, why: 'Busy student restaurant, open late' },
+  { id: 'nitte-sanmathi-cafe', label: 'Sanmathi Cafe', area: 'Nitte', lat: 13.18217, lng: 74.938, why: 'Busy cafe a short walk from campus' },
+  { id: 'nitte-rohans', label: 'Rohan\'s Eatery', area: 'Nitte', lat: 13.18161, lng: 74.93423, why: 'Busy student eatery near the bus stand' },
+  { id: 'nitte-ayyappa-temple', label: 'Ayyappa Swamy Temple, Parapadi', area: 'Nitte', lat: 13.16771, lng: 74.95168, why: 'Well-known temple with people around through the evening' },
+  { id: 'nitte-parapadi-post-office', label: 'Nitte Parapadi Post Office', area: 'Nitte', lat: 13.16407, lng: 74.95234, why: 'Public office on the Parapadi main road' },
+  { id: 'nitte-mahalingeshwara-temple', label: 'Shri Mahalingeshwara Temple', area: 'Nitte', lat: 13.15257, lng: 74.92551, why: 'Village temple, a busy public landmark' },
+  { id: 'nitte-belman-road-atm', label: 'Canara Bank ATM, Belman Road', area: 'Nitte', lat: 13.17354, lng: 74.8987, why: 'Lit ATM kiosk with CCTV on the main road' },
+  { id: 'nitte-lakshmi-janardhan-school', label: 'Sri Lakshmi Janardhan Intl School', area: 'Nitte', lat: 13.17168, lng: 74.886, why: 'School gate with security staff' },
+  { id: 'nitte-kukkundoor-bank', label: 'Corporation Bank, SH1 Kukkundoor', area: 'Nitte', lat: 13.19339, lng: 74.96925, why: 'Bank branch on SH1 with CCTV' },
+  { id: 'nitte-sangam-restaurant', label: 'Sangam Restaurant, SH1', area: 'Nitte', lat: 13.19443, lng: 74.97173, why: 'Roadside restaurant on SH1, staffed until late' },
+  // Karkala
+  { id: 'karkala-bus-stand', label: 'Karkala Bus Stand', area: 'Karkala', lat: 13.21288, lng: 74.99859, why: 'Busy, lit town bus stand with shops and autos' },
+  { id: 'karkala-town-police', label: 'Karkala Town Police Station', area: 'Karkala', lat: 13.22303, lng: 74.98125, night: true, why: 'Police station, staffed 24x7' },
+  { id: 'karkala-govt-hospital', label: 'Karkala Government Hospital', area: 'Karkala', lat: 13.21111, lng: 75.00086, night: true, why: 'Taluk hospital with a 24x7 casualty ward' },
+  { id: 'karkala-rotary-hospital', label: 'Dr T M A Pai Rotary Hospital', area: 'Karkala', lat: 13.22349, lng: 74.97836, night: true, why: 'Hospital with 24x7 emergency and security' },
+  { id: 'karkala-tma-pai-hospital', label: 'T M A Pai Hospital, Parpale', area: 'Karkala', lat: 13.1972, lng: 74.99629, night: true, why: 'Hospital on SH1 with emergency and security' },
+  { id: 'karkala-spandana-hospital', label: 'Spandana Maternity & General Hospital', area: 'Karkala', lat: 13.2113, lng: 74.99743, night: true, why: 'Hospital with staff on site round the clock' },
+  { id: 'karkala-city-nursing-home', label: 'City Nursing Home', area: 'Karkala', lat: 13.21224, lng: 74.99931, why: 'Nursing home next to the bus stand' },
+  { id: 'karkala-nursing-home', label: 'Karkala Nursing Home', area: 'Karkala', lat: 13.21494, lng: 74.99607, why: 'Nursing home on the main road' },
+  { id: 'karkala-amar-jyothi-clinic', label: 'Amar Jyothi Clinic', area: 'Karkala', lat: 13.20906, lng: 75.00033, why: 'Clinic near the government hospital' },
+  { id: 'karkala-sbi', label: 'State Bank of India, Karkala', area: 'Karkala', lat: 13.21315, lng: 75.00311, why: 'Main bank branch in town, lit with CCTV' },
+  { id: 'karkala-venkataramana-temple', label: 'Sri Venkataramana Temple', area: 'Karkala', lat: 13.21577, lng: 74.99278, why: 'Busy temple in the town centre' },
+  { id: 'karkala-gomateshwara', label: 'Karkala Gomateshwara (Bahubali)', area: 'Karkala', lat: 13.20385, lng: 75.00558, why: 'Major landmark with visitors and staff' },
+  { id: 'karkala-pradeep-fuel', label: 'Pradeep Fuel Station', area: 'Karkala', lat: 13.20448, lng: 74.99581, why: 'Lit petrol pump with attendants' },
+  { id: 'karkala-hp-fuel', label: 'HP Petrol Pump, SH1', area: 'Karkala', lat: 13.19336, lng: 74.99342, why: 'Lit petrol pump with attendants on SH1' },
+  { id: 'karkala-jain-basadi', label: 'Digambar Jain Temple', area: 'Karkala', lat: 13.20603, lng: 74.98661, why: 'Well-known temple and public landmark' },
+  { id: 'karkala-attur-church', label: 'St Lawrence Church, Attur', area: 'Karkala', lat: 13.2056, lng: 74.97209, why: 'Shrine open 24/7 with people around' },
+  { id: 'karkala-bhuvanendra-college', label: 'Sri Bhuvanendra College Gate', area: 'Karkala', lat: 13.21532, lng: 75.01154, why: 'College gate with security staff' },
+  { id: 'karkala-iocl-bunk', label: 'Indian Oil Petrol Bunk, Karkala', area: 'Karkala', lat: 13.23604, lng: 74.9845, why: 'Lit petrol pump, staffed 6 am to 10 pm' },
+  { id: 'karkala-canara-bank', label: 'Canara Bank, Karkala', area: 'Karkala', lat: 13.22699, lng: 74.98113, why: 'Bank branch near the police station, CCTV' },
+  { id: 'karkala-vijaya-bank', label: 'Vijaya Bank, Karkala', area: 'Karkala', lat: 13.23814, lng: 74.98325, why: 'Bank branch on the main road, CCTV' },
+  // Mulki
+  { id: 'mulki-bus-stand', label: 'Mulki Bus Stand', area: 'Mulki', lat: 13.09082, lng: 74.78742, why: 'Town bus stand on NH66, busy and lit' },
+  { id: 'mulki-govt-hospital', label: 'Mulki Government Hospital', area: 'Mulki', lat: 13.08749, lng: 74.7922, night: true, why: 'Government hospital with staff on site' },
+  { id: 'mulki-st-anns', label: 'St. Ann\'s Chethana Nursing Home, Karnad', area: 'Mulki', lat: 13.08581, lng: 74.7952, night: true, why: 'Nursing home with staff on site' },
+  { id: 'mulki-railway', label: 'Mulki Railway Station', area: 'Mulki', lat: 13.06896, lng: 74.80527, why: 'Railway station on the Konkan line' },
+  { id: 'mulki-canara-bank', label: 'Canara Bank, Mulki', area: 'Mulki', lat: 13.09065, lng: 74.78895, why: 'Bank branch near the bus stand, CCTV' },
+  { id: 'mulki-vijaya-bank', label: 'Vijaya Bank, Mulki', area: 'Mulki', lat: 13.08905, lng: 74.7891, why: 'Bank branch on the main road, CCTV' },
+  { id: 'mulki-syndicate-bank', label: 'Syndicate Bank, Karnad', area: 'Mulki', lat: 13.0853, lng: 74.794, why: 'Bank branch by Karnad market, CCTV' },
+  { id: 'mulki-sbi-kolnad', label: 'State Bank of India, Kolnad', area: 'Mulki', lat: 13.07319, lng: 74.80418, why: 'Bank branch near the railway station, CCTV' },
+  { id: 'mulki-bpcl', label: 'Bharat Petroleum, NH66 Mulki', area: 'Mulki', lat: 13.08287, lng: 74.78944, why: 'Lit petrol pump with attendants on NH66' },
+  { id: 'mulki-vijaya-college', label: 'Vijaya College Gate', area: 'Mulki', lat: 13.09401, lng: 74.79208, why: 'College gate with security staff' },
+  { id: 'mulki-karnad-college', label: 'Government Junior College, Karnad', area: 'Mulki', lat: 13.08679, lng: 74.79897, why: 'College gate on the main road' },
+  { id: 'mulki-venkataramana', label: 'Shri Venkataramana Temple, Mulki', area: 'Mulki', lat: 13.09331, lng: 74.79902, why: 'Well-known temple, a busy public landmark' },
+  { id: 'mulki-bappanad', label: 'Bappanad Durgaparameshwari Temple', area: 'Mulki', lat: 13.09492, lng: 74.78613, why: 'Famous temple by NH66 with people around' },
+  { id: 'mulki-immaculate-church', label: 'Immaculate Conception Church, Karnad', area: 'Mulki', lat: 13.08297, lng: 74.79521, why: 'Busy church and public landmark' },
+  { id: 'mulki-harihareshwara', label: 'Harihareshwara Temple', area: 'Mulki', lat: 13.08245, lng: 74.79308, why: 'Well-known temple, a busy public landmark' },
+  { id: 'mulki-vishnumurthy', label: 'Vishnu Murthy Temple', area: 'Mulki', lat: 13.08223, lng: 74.79178, why: 'Temple on the main road, a public landmark' },
+  { id: 'mulki-kunjaragiri', label: 'Mahalingeshwara Temple, Kunjaragiri', area: 'Mulki', lat: 13.09689, lng: 74.80983, why: 'Well-known temple, a public landmark' },
+  { id: 'mulki-adi-janardhana', label: 'Sri Adi Janardhana Swamy Temple', area: 'Mulki', lat: 13.08759, lng: 74.8128, why: 'Temple by the Shimanthoor post office' },
+  { id: 'mulki-kumara-mangala', label: 'Kumara Mangala Temple', area: 'Mulki', lat: 13.089, lng: 74.80995, why: 'Temple and public landmark' },
+  { id: 'mulki-chandramouleshwara', label: 'Chandramouleshwara Temple', area: 'Mulki', lat: 13.06368, lng: 74.80243, why: 'Temple near Mulki railway station' },
+  // Surathkal
+  { id: 'surathkal-bus-stand', label: 'Surathkal Bus Stand', area: 'Surathkal', lat: 12.99022, lng: 74.79987, why: 'Busy town bus stand on NH66, lit with shops' },
+  { id: 'surathkal-police', label: 'Surathkal Police Station', area: 'Surathkal', lat: 12.98424, lng: 74.80232, night: true, why: 'Police station, staffed 24x7' },
+  { id: 'surathkal-railway', label: 'Surathkal Railway Station', area: 'Surathkal', lat: 12.99024, lng: 74.80535, why: 'Railway station on the Konkan line' },
+  { id: 'surathkal-govt-hospital', label: 'Surathkal Government Hospital', area: 'Surathkal', lat: 12.98731, lng: 74.80354, night: true, why: 'Government hospital with staff on site' },
+  { id: 'surathkal-padmavathi', label: 'Padmavathi Hospital', area: 'Surathkal', lat: 12.99165, lng: 74.80046, night: true, why: 'Hospital with staff on site round the clock' },
+  { id: 'surathkal-venus', label: 'Venus Hospital', area: 'Surathkal', lat: 12.98807, lng: 74.80163, why: 'Hospital near Surathkal market' },
+  { id: 'surathkal-misquith-rao', label: 'Misquith and Rao\'s Hospital', area: 'Surathkal', lat: 12.98367, lng: 74.81251, why: 'Hospital with staff on site' },
+  { id: 'nitk-gate', label: 'NITK Gate Bus Stop', area: 'Surathkal', lat: 13.01202, lng: 74.79307, night: true, why: 'NITK campus gate on NH66 with security staff' },
+  { id: 'nitk-sbi', label: 'State Bank of India, NITK Campus', area: 'Surathkal', lat: 13.0089, lng: 74.79409, why: 'Bank inside the NITK campus, CCTV' },
+  { id: 'nitk-health-centre', label: 'Health Sub-centre, NITK', area: 'Surathkal', lat: 13.00944, lng: 74.79613, why: 'Health centre with staff on site' },
+  { id: 'surathkal-srinivas-hospital', label: 'Srinivas Hospital, Mukka', area: 'Surathkal', lat: 13.02151, lng: 74.79194, night: true, why: 'Hospital with 24x7 emergency and security' },
+  { id: 'surathkal-mukka-bus-stop', label: 'Mukka Bus Stop', area: 'Surathkal', lat: 13.02158, lng: 74.79022, why: 'Busy bus stop on NH66' },
+  { id: 'surathkal-abish-mall', label: 'Abish Mall', area: 'Surathkal', lat: 12.9915, lng: 74.79889, why: 'Mall with security, next to the bus stand' },
+  { id: 'surathkal-govinda-dasa', label: 'Govinda Dasa College Gate', area: 'Surathkal', lat: 12.98494, lng: 74.803, why: 'College gate with security staff' },
+  { id: 'surathkal-bpcl', label: 'Bharat Petroleum, Surathkal', area: 'Surathkal', lat: 12.98827, lng: 74.80407, why: 'Lit petrol pump with attendants' },
+  { id: 'surathkal-sbi', label: 'State Bank of India, Surathkal', area: 'Surathkal', lat: 12.98655, lng: 74.80745, why: 'Bank branch near Krishnapura Cross, CCTV' },
+  { id: 'surathkal-kaikamba', label: 'Kaikamba Bus Stop, Katipalla', area: 'Surathkal', lat: 12.99394, lng: 74.8348, why: 'Busy bus stop in Katipalla' },
+  { id: 'surathkal-katipalla-college', label: 'Katipalla Government College', area: 'Surathkal', lat: 13.0005, lng: 74.83104, why: 'College gate on the main road' },
+  { id: 'surathkal-sacred-heart', label: 'Sacred Heart Church, Surathkal', area: 'Surathkal', lat: 12.98629, lng: 74.80479, why: 'Busy church and public landmark' },
+  { id: 'surathkal-hosabettu-fuel', label: 'Hosabettu Petrol Pump', area: 'Surathkal', lat: 12.9767, lng: 74.80383, why: 'Lit petrol pump with attendants on NH66' },
+  // Mangaluru
+  { id: 'mangaluru-ksrtc', label: 'KSRTC Bus Stand, Bejai', area: 'Mangaluru', lat: 12.88469, lng: 74.84178, night: true, why: '24x7 state bus terminal with security and CCTV' },
+  { id: 'mangaluru-central', label: 'Mangaluru Central Railway Station', area: 'Mangaluru', lat: 12.8634, lng: 74.84324, night: true, why: '24x7 railway station with Railway Protection Force' },
+  { id: 'mangaluru-wenlock', label: 'Government Wenlock Hospital', area: 'Mangaluru', lat: 12.86714, lng: 74.84277, night: true, why: 'District hospital with a 24x7 casualty ward' },
+  { id: 'mangaluru-kadri-police', label: 'Kadri Police Station', area: 'Mangaluru', lat: 12.89028, lng: 74.85267, night: true, why: 'Police station, staffed 24x7' },
+  { id: 'mangaluru-pandeshwara-police', label: 'Pandeshwara Police Station', area: 'Mangaluru', lat: 12.85609, lng: 74.83931, night: true, why: 'Police station, staffed 24x7' },
+  { id: 'mangaluru-junction', label: 'Mangaluru Junction Railway Station', area: 'Mangaluru', lat: 12.86663, lng: 74.87923, night: true, why: '24x7 railway station with Railway Protection Force' },
+  { id: 'mangaluru-urwa-police', label: 'Urwa Police Station', area: 'Mangaluru', lat: 12.90224, lng: 74.83582, night: true, why: 'Police station, staffed 24x7' },
+  { id: 'mangaluru-aj-hospital', label: 'A. J. Hospital', area: 'Mangaluru', lat: 12.89939, lng: 74.84572, night: true, why: 'Hospital with 24x7 emergency and security' },
+  { id: 'mangaluru-father-muller', label: 'Father Muller Hospital', area: 'Mangaluru', lat: 12.86622, lng: 74.85959, night: true, why: 'Hospital with 24x7 emergency and security' },
+  { id: 'mangaluru-kmc-attavar', label: 'KMC Hospital, Attavar', area: 'Mangaluru', lat: 12.87172, lng: 74.84848, night: true, why: 'Hospital with 24x7 emergency and security' },
+  { id: 'mangaluru-highland', label: 'Highland Hospital', area: 'Mangaluru', lat: 12.8664, lng: 74.85466, night: true, why: 'Hospital with 24x7 emergency and security' },
+  { id: 'mangaluru-indiana', label: 'Indiana Hospital', area: 'Mangaluru', lat: 12.86768, lng: 74.86642, night: true, why: 'Hospital with 24x7 emergency and security' },
+  { id: 'mangaluru-esi', label: 'ESI Hospital', area: 'Mangaluru', lat: 12.87417, lng: 74.86112, night: true, why: 'Government hospital with staff on site' },
+  { id: 'mangaluru-lady-goschen', label: 'Lady Goschen Hospital', area: 'Mangaluru', lat: 12.86505, lng: 74.83797, night: true, why: 'Government hospital with a 24x7 maternity ward' },
+  { id: 'mangaluru-city-centre', label: 'City Centre Mall', area: 'Mangaluru', lat: 12.87127, lng: 74.84283, why: 'Busy mall with security and CCTV' },
+  { id: 'mangaluru-fiza', label: 'Forum Fiza by Nexus Mall', area: 'Mangaluru', lat: 12.85762, lng: 74.83835, why: 'Busy mall with security and CCTV' },
+  { id: 'mangaluru-bharath-mall', label: 'Bharath Mall', area: 'Mangaluru', lat: 12.88653, lng: 74.841, why: 'Busy mall with security and CCTV' },
+  { id: 'mangaluru-statebank-bus-stand', label: 'State Bank Service Bus Stand', area: 'Mangaluru', lat: 12.86317, lng: 74.83735, why: 'Busy city bus stand, lit, with shops' },
+  { id: 'mangaluru-aloysius', label: 'St. Aloysius University Gate', area: 'Mangaluru', lat: 12.87425, lng: 74.84512, why: 'Campus gate with security staff' },
+  { id: 'mangaluru-kpt', label: 'Karnataka Polytechnic (KPT) Circle', area: 'Mangaluru', lat: 12.89179, lng: 74.85409, why: 'Busy junction by the college gate' },
+];
+
+// A drop-off counts as a hotspot if it's within this distance of one. Kept
+// under half the closest spacing between two hotspots (~106 m in Karkala,
+// bus stand <-> City Nursing Home).
+const MATCH_RADIUS_KM = 0.05;
+
+const HOTSPOT_BY_ID = new Map(SAFE_HOTSPOTS.map((h) => [h.id, h]));
+
+function findHotspot(point) {
+  let best = null;
+  let bestKm = MATCH_RADIUS_KM;
+  for (const h of SAFE_HOTSPOTS) {
+    const km = haversineKm(h, point);
+    if (km <= bestKm) {
+      best = h;
+      bestKm = km;
+    }
+  }
+  return best;
+}
+
+function getHotspot(id) {
+  return HOTSPOT_BY_ID.get(id) || null;
+}
+
+const NIGHT_HOTSPOTS = SAFE_HOTSPOTS.filter((h) => h.night);
+
+// The `count` night-safe spots closest to `point`, as [{ hotspot, km }] —
+// offered as alternatives when a rider picks a day-only drop-off at night.
+function nearestNightSafe(point, count = 3) {
+  return NIGHT_HOTSPOTS.map((h) => ({ hotspot: h, km: haversineKm(h, point) }))
+    .sort((a, b) => a.km - b.km)
+    .slice(0, count);
+}
+
+module.exports = { SAFE_HOTSPOTS, NIGHT_HOTSPOTS, findHotspot, getHotspot, nearestNightSafe };
